@@ -2,11 +2,10 @@
 set -euo pipefail
 
 # =========================
-# n8n + Redis + Nginx One-Click Setup for Ubuntu 24.04
+# n8n + Nginx One-Click Setup for Ubuntu 24.04 (no Redis)
 # Usage:
 #   sudo bash setup.sh [path/to/.env]
-# If no .env is given, uses ./.env or falls back to ./.env.example.
-# This script copies compose + env into /opt/n8n and runs from there.
+# If no .env is given, uses ./.env or ./.env.example.
 # =========================
 
 log()  { echo -e "\033[1;32m[+] $*\033[0m"; }
@@ -28,7 +27,6 @@ detect_os() {
   PKG_MGR="apt-get"
 }
 
-# Resolve env file precedence: arg > ./ .env > ./.env.example
 resolve_env_file() {
   if [[ -n "${1:-}" && -f "$1" ]]; then
     ENV_SRC="$1"
@@ -43,7 +41,6 @@ resolve_env_file() {
   log "Using env from: $ENV_SRC"
 }
 
-# Load env into current shell (exports)
 load_env() {
   set -a
   # shellcheck disable=SC1090
@@ -55,8 +52,7 @@ load_env() {
   : "${DOMAIN:=}"                 # optional
   : "${USE_LETSENCRYPT:=false}"   # "true" to enable certbot
   : "${NGINX_EMAIL:=}"            # required if USE_LETSENCRYPT=true
-  : "${REDIS_PASSWORD:=change-me-strong}"
-  : "${WEBHOOK_URL:=http://localhost/}"  # can be updated later
+  : "${WEBHOOK_URL:=http://localhost/}"
 }
 
 install_base() {
@@ -65,7 +61,6 @@ install_base() {
   DEBIAN_FRONTEND=noninteractive $PKG_MGR install -y \
     ca-certificates curl gnupg lsb-release ufw
 
-  # Docker CE
   if ! command -v docker >/dev/null 2>&1; then
     log "Installing Docker CE + Compose plugin..."
     install -m 0755 -d /etc/apt/keyrings
@@ -84,7 +79,6 @@ install_base() {
     log "Docker already installed."
   fi
 
-  # Nginx
   if ! command -v nginx >/dev/null 2>&1; then
     log "Installing Nginx..."
     DEBIAN_FRONTEND=noninteractive $PKG_MGR install -y nginx
@@ -93,7 +87,6 @@ install_base() {
     log "Nginx already installed."
   fi
 
-  # Certbot if requested
   if [[ "$USE_LETSENCRYPT" == "true" ]]; then
     if [[ -z "${DOMAIN}" || -z "${NGINX_EMAIL}" ]]; then
       warn "USE_LETSENCRYPT=true but DOMAIN/NGINX_EMAIL not set. Skipping TLS."
@@ -119,23 +112,20 @@ stage_compose_stack() {
   log "Copying compose + env into $APP_DIR"
   cp -f docker-compose.yml "$APP_DIR/docker-compose.yml"
 
-  # Write env
   if [[ "$ENV_SRC" != "$APP_DIR/.env" ]]; then
     cp -f "$ENV_SRC" "$APP_DIR/.env"
   fi
 
-  # Ensure data dirs
-  mkdir -p "$APP_DIR/n8n_data" "$APP_DIR/redis_data"
+  mkdir -p "$APP_DIR/n8n_data"
 
-  # Make sure these values exist in /opt/n8n/.env for Compose substitutions
-  if ! grep -q '^N8N_TAG=' "$APP_DIR/.env"; then echo "N8N_TAG=$N8N_TAG" >> "$APP_DIR/.env"; fi
-  if ! grep -q '^N8N_PORT=' "$APP_DIR/.env"; then echo "N8N_PORT=$N8N_PORT" >> "$APP_DIR/.env"; fi
-  if ! grep -q '^REDIS_PASSWORD=' "$APP_DIR/.env"; then echo "REDIS_PASSWORD=$REDIS_PASSWORD" >> "$APP_DIR/.env"; fi
-  if ! grep -q '^WEBHOOK_URL=' "$APP_DIR/.env"; then echo "WEBHOOK_URL=$WEBHOOK_URL" >> "$APP_DIR/.env"; fi
+  # Ensure needed values exist in /opt/n8n/.env for Compose substitutions
+  grep -q '^N8N_TAG='   "$APP_DIR/.env" || echo "N8N_TAG=$N8N_TAG"     >> "$APP_DIR/.env"
+  grep -q '^N8N_PORT='  "$APP_DIR/.env" || echo "N8N_PORT=$N8N_PORT"   >> "$APP_DIR/.env"
+  grep -q '^WEBHOOK_URL=' "$APP_DIR/.env" || echo "WEBHOOK_URL=$WEBHOOK_URL" >> "$APP_DIR/.env"
 }
 
 deploy_compose() {
-  log "Starting n8n + Redis via Docker Compose..."
+  log "Starting n8n via Docker Compose..."
   (cd /opt/n8n && docker compose pull && docker compose up -d)
 }
 
@@ -145,13 +135,12 @@ configure_nginx() {
 
   log "Installing Nginx site config..."
   mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
-  # Render template
+
   sed -e "s/{{DOMAIN}}/${DOMAIN:-_}/g" \
       -e "s/{{N8N_PORT}}/${N8N_PORT}/g" \
       nginx/n8n.conf.template > "$avail"
 
   ln -sf "$avail" "$enable"
-  # Remove default site if present
   [[ -f /etc/nginx/sites-enabled/default ]] && rm -f /etc/nginx/sites-enabled/default
 
   nginx -t
@@ -170,7 +159,7 @@ install_systemd_unit() {
   log "Creating systemd unit to ensure stack starts on boot..."
   cat > "$unit" <<'UNIT'
 [Unit]
-Description=n8n + Redis via Docker Compose
+Description=n8n via Docker Compose
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
