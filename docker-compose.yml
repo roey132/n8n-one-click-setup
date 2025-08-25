@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  n8n:
+    image: "n8nio/n8n:${N8N_TAG:-latest}"
+    env_file:
+      - .env
+    # Bind only to localhost; Nginx will be the public entrypoint
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    restart: unless-stopped
+    user: "0:0"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD}",
+      ]
+    environment:
+      - TZ=${GENERIC_TIMEZONE:-Etc/UTC}
+    volumes:
+      - ./redis_data:/data
+    restart: unless-stopped
+
+networks:
+  default:
+    name: n8n_net
